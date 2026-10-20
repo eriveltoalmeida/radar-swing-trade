@@ -14,10 +14,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Injeção de CSS para transformar em interface de app móvel
 st.markdown("""
 <style>
-    /* Remove margens e espaçamentos mortos do Streamlit */
     .block-container {
         padding-top: 0.8rem !important;
         padding-bottom: 2rem !important;
@@ -26,7 +24,6 @@ st.markdown("""
     }
     header, footer { visibility: hidden !important; height: 0px !important; }
     
-    /* Barra Superior Fixa / Compacta */
     .top-bar {
         display: flex;
         justify-content: space-between;
@@ -41,7 +38,6 @@ st.markdown("""
     .top-bar .badge-alta { background: #00875A; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
     .top-bar .badge-baixa { background: #DE350B; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
 
-    /* Cartão de Ação / Setup */
     .trade-card {
         background: #161A23;
         border: 1px solid #232838;
@@ -59,18 +55,24 @@ st.markdown("""
     .ticker-name { font-size: 16px; font-weight: 800; color: #FFFFFF; }
     .setup-pill { background: #1C2B22; color: #00D084; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
     
-    /* Grade de Métricas em linha única */
+    /* Tags de Status da Entrada */
+    .status-aguardando { background: #2B2610; color: #FFD000; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+    .status-comprar { background: #004D2E; color: #00FF9D; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+    .status-esticado { background: #4D1212; color: #FF6666; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+    
+    /* Grade de Métricas ajustada para 4 colunas */
     .metrics-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 6px;
+        grid-template-columns: 1fr 1fr 1fr 1fr;
+        gap: 4px;
         background: #0D1017;
-        padding: 6px 8px;
+        padding: 6px 6px;
         border-radius: 6px;
         text-align: center;
     }
-    .m-item .m-label { font-size: 10px; color: #8A94A6; text-transform: uppercase; }
-    .m-item .m-val { font-size: 13px; font-weight: 700; color: #F1F3F5; }
+    .m-item .m-label { font-size: 9px; color: #8A94A6; text-transform: uppercase; }
+    .m-item .m-val { font-size: 12.5px; font-weight: 700; color: #F1F3F5; }
+    
     .card-footer {
         display: flex;
         justify-content: space-between;
@@ -100,9 +102,6 @@ TICKERS = sorted(list(set([
     "UGPA3.SA", "VALE3.SA", "VIVT3.SA", "WEGE3.SA"
 ])))
 
-# ==========================================
-# CÁLCULOS
-# ==========================================
 def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
@@ -136,7 +135,7 @@ def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     df["MAX_20"] = df["High"].shift(1).rolling(window=20).max()
     return df
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=900)  # Reduzido para 15 min de cache para acompanhar o pregão
 def executar_radar():
     ibov = yf.download("^BVSP", period="1y", interval="1d", progress=False)
     if isinstance(ibov.columns, pd.MultiIndex):
@@ -179,7 +178,7 @@ def executar_radar():
                     setup_nome = "Pullback MME21"
                     gatilho = round(float(ult["High"]) + (0.10 * atr), 2)
                     stop = round(min(float(ult["Low"]), float(ant["Low"])) - (1.0 * atr), 2)
-                # Breakout
+                # Breakout 20d
                 elif float(ult["High"]) >= float(ult["MAX_20"]) and float(ult["Volume"]) > float(ult["VOL_SMA_20"]):
                     setup_nome = "Breakout 20d"
                     gatilho = round(float(ult["High"]) + (0.10 * atr), 2)
@@ -191,15 +190,31 @@ def executar_radar():
                 if 0 < risco_pct <= 8.0:
                     qtd = min(int((CAPITAL_TOTAL * RISCO_MAX_TRADE) // risco_acao), int((CAPITAL_TOTAL * ALOCACAO_MAX_POSICAO) // gatilho))
                     if qtd > 0:
+                        # Avaliação do Ponto de Entrada vs Cotação Atual
+                        dist_gatilho_pct = ((preco - gatilho) / gatilho) * 100
+                        if preco < gatilho:
+                            status_txt = "AGUARDANDO"
+                            status_css = "status-aguardando"
+                        elif preco >= gatilho and dist_gatilho_pct <= 1.0:
+                            status_txt = "ENTRAR AGORA"
+                            status_css = "status-comprar"
+                        else:
+                            status_txt = "ESTICOU"
+                            status_css = "status-esticado"
+
                         setups.append({
                             "Ticker": ticker.replace(".SA", ""),
                             "Setup": setup_nome,
+                            "PrecoAtual": preco,
                             "Gatilho": gatilho,
                             "Stop": stop,
                             "Alvo": round(gatilho + (2 * risco_acao), 2),
                             "Risco": round(risco_pct, 1),
                             "Qtd": qtd,
-                            "Total": round(qtd * gatilho, 2)
+                            "Total": round(qtd * gatilho, 2),
+                            "StatusTxt": status_txt,
+                            "StatusCss": status_css,
+                            "DistGatilho": dist_gatilho_pct
                         })
 
             radar.append({
@@ -215,11 +230,10 @@ def executar_radar():
     return regime_ibov, preco_ibov, pd.DataFrame(setups), pd.DataFrame(radar)
 
 # ==========================================
-# RENDERIZAÇÃO DIRETA (ZERO FLUFF)
+# RENDERIZAÇÃO
 # ==========================================
 regime_ibov, preco_ibov, df_setups, df_radar = executar_radar()
 
-# Barra Superior
 badge_classe = "badge-alta" if regime_ibov == "ALTA" else "badge-baixa"
 st.markdown(f"""
 <div class="top-bar">
@@ -228,23 +242,29 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Alternador compacto de visão
 aba = st.radio("visão", ["🎯 Setups Armados", "📊 Radar Geral"], horizontal=True, label_visibility="collapsed")
 
 if aba == "🎯 Setups Armados":
     if df_setups.empty:
-        st.info("Nenhum setup qualificado com risco adequado hoje.")
+        st.info("Nenhum setup qualificado hoje.")
     else:
         for _, s in df_setups.iterrows():
             st.markdown(f"""
             <div class="trade-card">
                 <div class="card-header">
-                    <span class="ticker-name">{s['Ticker']}</span>
+                    <div>
+                        <span class="ticker-name">{s['Ticker']}</span>
+                        <span class="{s['StatusCss']}">{s['StatusTxt']}</span>
+                    </div>
                     <span class="setup-pill">{s['Setup']}</span>
                 </div>
                 <div class="metrics-grid">
                     <div class="m-item">
-                        <div class="m-label">Entrada</div>
+                        <div class="m-label">Atual</div>
+                        <div class="m-val" style="color: #61A5FF;">R$ {s['PrecoAtual']:.2f}</div>
+                    </div>
+                    <div class="m-item">
+                        <div class="m-label">Gatilho</div>
                         <div class="m-val">R$ {s['Gatilho']:.2f}</div>
                     </div>
                     <div class="m-item">
@@ -258,20 +278,14 @@ if aba == "🎯 Setups Armados":
                 </div>
                 <div class="card-footer">
                     <span>Lote: <b>{s['Qtd']} ações</b> (R$ {s['Total']:,.0f})</span>
-                    <span>Risco: <b>{s['Risco']}%</b></span>
+                    <span>Dist. Gatilho: <b>{s['DistGatilho']:+.1f}%</b></span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
 else:
-    st.dataframe(
-        df_radar,
-        use_container_width=True,
-        hide_index=True,
-        height=400
-    )
+    st.dataframe(df_radar, use_container_width=True, hide_index=True, height=400)
 
-# Botão discreto no rodapé
 if st.button("🔄 Atualizar Cotações", use_container_width=True):
     st.cache_data.clear()
     st.rerun()

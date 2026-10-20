@@ -2,18 +2,85 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import plotly.express as px
 from datetime import datetime
 
 # ==========================================
-# CONFIGURAÇÃO DE TELA MÓVEL
+# CONFIGURAÇÃO DE TELA MÓVEL & TEMA NATIVO
 # ==========================================
 st.set_page_config(
     page_title="Radar B3",
-    page_icon="📈",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Injeção de CSS para transformar em interface de app móvel
+st.markdown("""
+<style>
+    /* Remove margens e espaçamentos mortos do Streamlit */
+    .block-container {
+        padding-top: 0.8rem !important;
+        padding-bottom: 2rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
+    }
+    header, footer { visibility: hidden !important; height: 0px !important; }
+    
+    /* Barra Superior Fixa / Compacta */
+    .top-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: #11141C;
+        border: 1px solid #1E2330;
+        border-radius: 10px;
+        padding: 8px 14px;
+        margin-bottom: 10px;
+    }
+    .top-bar .title { font-size: 15px; font-weight: 700; color: #FFFFFF; }
+    .top-bar .badge-alta { background: #00875A; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
+    .top-bar .badge-baixa { background: #DE350B; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
+
+    /* Cartão de Ação / Setup */
+    .trade-card {
+        background: #161A23;
+        border: 1px solid #232838;
+        border-left: 4px solid #00D084;
+        border-radius: 8px;
+        padding: 9px 12px;
+        margin-bottom: 8px;
+    }
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+    }
+    .ticker-name { font-size: 16px; font-weight: 800; color: #FFFFFF; }
+    .setup-pill { background: #1C2B22; color: #00D084; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    
+    /* Grade de Métricas em linha única */
+    .metrics-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 6px;
+        background: #0D1017;
+        padding: 6px 8px;
+        border-radius: 6px;
+        text-align: center;
+    }
+    .m-item .m-label { font-size: 10px; color: #8A94A6; text-transform: uppercase; }
+    .m-item .m-val { font-size: 13px; font-weight: 700; color: #F1F3F5; }
+    .card-footer {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 5px;
+        font-size: 11px;
+        color: #8A94A6;
+    }
+    .card-footer span b { color: #D0D5DD; }
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # PARÂMETROS GERAIS
@@ -34,7 +101,7 @@ TICKERS = sorted(list(set([
 ])))
 
 # ==========================================
-# FUNÇÕES DE CÁLCULO QUANTITATIVO
+# CÁLCULOS
 # ==========================================
 def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     if df.index.tz is not None:
@@ -44,14 +111,12 @@ def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     df["SMA_50"] = df["Close"].rolling(window=50).mean()
     df["SMA_200"] = df["Close"].rolling(window=200).mean()
 
-    # RSI
     delta = df["Close"].diff()
     gain = delta.clip(lower=0).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
-    # ATR & ADX
     tr1 = df["High"] - df["Low"]
     tr2 = (df["High"] - df["Close"].shift()).abs()
     tr3 = (df["Low"] - df["Close"].shift()).abs()
@@ -71,9 +136,8 @@ def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     df["MAX_20"] = df["High"].shift(1).rolling(window=20).max()
     return df
 
-@st.cache_data(ttl=3600)  # Guarda os dados em cache por 1 hora para economizar tráfego no celular
+@st.cache_data(ttl=3600)
 def executar_radar():
-    # Contexto Ibov
     ibov = yf.download("^BVSP", period="1y", interval="1d", progress=False)
     if isinstance(ibov.columns, pd.MultiIndex):
         close_ibov = ibov["Close"].iloc[:, 0].dropna()
@@ -101,7 +165,7 @@ def executar_radar():
             atr = float(ult["ATR"])
             vol_fin = preco * float(ult["VOL_SMA_20"])
             ret_ativo = ((preco - float(df["Close"].iloc[-(JANELA_FORCA_RELATIVA+1)])) / float(df["Close"].iloc[-(JANELA_FORCA_RELATIVA+1)])) * 100
-            rs_ibov = round(ret_ativo - retorno_ibov_21d, 2)
+            rs_ibov = round(ret_ativo - retorno_ibov_21d, 1)
 
             tend_alta = preco > float(ult["SMA_200"]) and float(ult["EMA_21"]) > float(ult["SMA_50"])
             dist_mme21 = abs(float(ult["Low"]) - float(ult["EMA_21"])) / float(ult["EMA_21"])
@@ -110,18 +174,17 @@ def executar_radar():
             gatilho, stop = None, None
 
             if vol_fin >= MIN_VOL_FINANCEIRO_DIA and tend_alta and float(ult["ADX"]) > ADX_MIN:
-                # Setup Pullback
+                # Pullback MME21
                 if dist_mme21 <= 0.025 and preco > float(ult["EMA_21"]):
                     setup_nome = "Pullback MME21"
                     gatilho = round(float(ult["High"]) + (0.10 * atr), 2)
                     stop = round(min(float(ult["Low"]), float(ant["Low"])) - (1.0 * atr), 2)
-                # Setup Breakout
+                # Breakout
                 elif float(ult["High"]) >= float(ult["MAX_20"]) and float(ult["Volume"]) > float(ult["VOL_SMA_20"]):
                     setup_nome = "Breakout 20d"
                     gatilho = round(float(ult["High"]) + (0.10 * atr), 2)
                     stop = round(min(float(ult["Low"]), float(ant["Low"])) - (1.0 * atr), 2)
 
-            # Se armou setup dentro do risco
             if setup_nome and gatilho and stop:
                 risco_acao = gatilho - stop
                 risco_pct = (risco_acao / gatilho) * 100
@@ -132,20 +195,19 @@ def executar_radar():
                             "Ticker": ticker.replace(".SA", ""),
                             "Setup": setup_nome,
                             "Gatilho": gatilho,
-                            "Stop Loss": stop,
-                            "Alvo (2:1)": round(gatilho + (2 * risco_acao), 2),
-                            "Risco (%)": round(risco_pct, 1),
+                            "Stop": stop,
+                            "Alvo": round(gatilho + (2 * risco_acao), 2),
+                            "Risco": round(risco_pct, 1),
                             "Qtd": qtd,
-                            "Total (R$)": round(qtd * gatilho, 2)
+                            "Total": round(qtd * gatilho, 2)
                         })
 
             radar.append({
-                "Ticker": ticker.replace(".SA", ""),
+                "Papel": ticker.replace(".SA", ""),
                 "Preço": round(preco, 2),
-                "RSI": round(float(ult["RSI"]), 1),
-                "ADX": round(float(ult["ADX"]), 1),
-                "RS vs IBOV (%)": rs_ibov,
-                "Tendência": "Alta" if tend_alta else "Neutra/Baixa"
+                "RSI": round(float(ult["RSI"]), 0),
+                "ADX": round(float(ult["ADX"]), 0),
+                "RS Ibov": f"{rs_ibov:+}%"
             })
         except Exception:
             continue
@@ -153,49 +215,63 @@ def executar_radar():
     return regime_ibov, preco_ibov, pd.DataFrame(setups), pd.DataFrame(radar)
 
 # ==========================================
-# INTERFACE DO APP (STREAMLIT)
+# RENDERIZAÇÃO DIRETA (ZERO FLUFF)
 # ==========================================
-st.title("📱 Radar Swing Trade B3")
+regime_ibov, preco_ibov, df_setups, df_radar = executar_radar()
 
-with st.spinner("Atualizando cotações..."):
-    regime_ibov, preco_ibov, df_setups, df_radar = executar_radar()
+# Barra Superior
+badge_classe = "badge-alta" if regime_ibov == "ALTA" else "badge-baixa"
+st.markdown(f"""
+<div class="top-bar">
+    <div class="title">⚡ Radar Swing Trade</div>
+    <div class="{badge_classe}">IBOV: {regime_ibov} ({preco_ibov:,.0f})</div>
+</div>
+""", unsafe_allow_html=True)
 
-# Cartões de Métricas no topo da tela do celular
-col1, col2 = st.columns(2)
-with col1:
-    cor_regime = "green" if regime_ibov == "ALTA" else "red"
-    st.metric("Regime Ibov", f"{regime_ibov}", delta=f"{preco_ibov:,.0f} pts")
-with col2:
-    st.metric("Capital Alocado", f"R$ {CAPITAL_TOTAL:,.2f}")
+# Alternador compacto de visão
+aba = st.radio("visão", ["🎯 Setups Armados", "📊 Radar Geral"], horizontal=True, label_visibility="collapsed")
 
-st.write("---")
-
-# Abas pensadas para navegação rápida pelo polegar
-tab_setups, tab_radar = st.tabs(["🎯 Setups Armados", "📊 Radar de Ações"])
-
-with tab_setups:
-    st.subheader("Gatilhos para o Pregão")
+if aba == "🎯 Setups Armados":
     if df_setups.empty:
-        st.info("Nenhum setup qualificado com risco controlado hoje.")
+        st.info("Nenhum setup qualificado com risco adequado hoje.")
     else:
-        # Exibe em cartões individuais mais amigáveis para celular do que tabelas largas
         for _, s in df_setups.iterrows():
-            with st.container():
-                st.markdown(f"### **{s['Ticker']}** · `{s['Setup']}`")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Gatilho", f"R$ {s['Gatilho']:.2f}")
-                c2.metric("Stop", f"R$ {s['Stop Loss']:.2f}")
-                c3.metric("Alvo", f"R$ {s['Alvo (2:1)']:.2f}")
-                st.caption(f"Operação sugerida: **{s['Qtd']} ações** (~R$ {s['Total (R$)']:,.2f}) | Risco: {s['Risco (%)']}%")
-                st.divider()
+            st.markdown(f"""
+            <div class="trade-card">
+                <div class="card-header">
+                    <span class="ticker-name">{s['Ticker']}</span>
+                    <span class="setup-pill">{s['Setup']}</span>
+                </div>
+                <div class="metrics-grid">
+                    <div class="m-item">
+                        <div class="m-label">Entrada</div>
+                        <div class="m-val">R$ {s['Gatilho']:.2f}</div>
+                    </div>
+                    <div class="m-item">
+                        <div class="m-label">Stop</div>
+                        <div class="m-val" style="color: #FF5C5C;">R$ {s['Stop']:.2f}</div>
+                    </div>
+                    <div class="m-item">
+                        <div class="m-label">Alvo 2:1</div>
+                        <div class="m-val" style="color: #00D084;">R$ {s['Alvo']:.2f}</div>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <span>Lote: <b>{s['Qtd']} ações</b> (R$ {s['Total']:,.0f})</span>
+                    <span>Risco: <b>{s['Risco']}%</b></span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-with tab_radar:
-    st.subheader("Monitoramento de Papéis")
-    busca = st.text_input("Filtrar Ticker:", "").upper()
-    if busca:
-        df_radar = df_radar[df_radar["Ticker"].str.contains(busca)]
-    st.dataframe(df_radar, use_container_width=True, hide_index=True)
+else:
+    st.dataframe(
+        df_radar,
+        use_container_width=True,
+        hide_index=True,
+        height=400
+    )
 
-if st.button("🔄 Forçar Atualização"):
+# Botão discreto no rodapé
+if st.button("🔄 Atualizar Cotações", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
